@@ -192,7 +192,8 @@ const existingKeys = new Set(
 
 function pct(num, den) {
   if (den === 0) return "N/A";
-  return ((num / den) * 100).toFixed(1) + "%";
+  // Apostrophe prefix prevents Sheets from converting "1.3%" into decimal 0.013
+  return "'" + ((num / den) * 100).toFixed(1) + "%";
 }
 
 const allRows = campaigns.map(c => [

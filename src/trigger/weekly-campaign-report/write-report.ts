@@ -21,7 +21,8 @@ const DETAILS_HEADERS = [
 
 function pct(numerator: number, denominator: number): string {
   if (denominator === 0) return "N/A";
-  return ((numerator / denominator) * 100).toFixed(1) + "%";
+  // Apostrophe prefix prevents Sheets from converting "1.3%" into decimal 0.013
+  return "'" + ((numerator / denominator) * 100).toFixed(1) + "%";
 }
 
 function formatDate(iso: string): string {
