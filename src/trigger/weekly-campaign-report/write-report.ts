@@ -42,14 +42,15 @@ async function ensureTab(
       spreadsheetId,
       requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
     });
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${tabName}!A1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [headers] },
-    });
     logger.info(`Created tab: ${tabName}`);
   }
+  // Always overwrite row 1 with current headers — fixes stale headers from old code versions
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${tabName}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [headers] },
+  });
 }
 
 export const writeReportTask = task({
@@ -112,13 +113,11 @@ export const writeReportTask = task({
       return !existingKeys.has(key);
     });
 
-    const rows = deduped;
-
-    if (allRows.length !== rows.length) {
-      logger.info(`Skipped ${allRows.length - rows.length} duplicate row(s) already in sheet`);
+    if (allRows.length !== deduped.length) {
+      logger.info(`Skipped ${allRows.length - deduped.length} duplicate row(s) already in sheet`);
     }
 
-    if (rows.length === 0) {
+    if (deduped.length === 0) {
       logger.info("No new campaigns to write for this week");
       return { rowsWritten: 0 };
     }
@@ -128,11 +127,11 @@ export const writeReportTask = task({
       range: DETAILS_TAB,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
-      requestBody: { values: rows },
+      requestBody: { values: deduped },
     });
 
-    logger.info(`Wrote ${rows.length} campaign rows to Google Sheets`, { spreadsheetId });
+    logger.info(`Wrote ${deduped.length} campaign rows to Google Sheets`, { spreadsheetId });
 
-    return { rowsWritten: rows.length };
+    return { rowsWritten: deduped.length };
   },
 });

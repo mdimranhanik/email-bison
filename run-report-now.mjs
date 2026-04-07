@@ -160,7 +160,7 @@ const credentials = JSON.parse(Buffer.from(SA_JSON, "base64").toString("utf-8"))
 const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
 const sheets = google.sheets({ version: "v4", auth });
 
-// Ensure tab exists
+// Ensure tab exists, always repair headers on row 1
 const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
 const existingTabs = (meta.data.sheets ?? []).map(s => s.properties?.title ?? "");
 if (!existingTabs.includes(DETAILS_TAB)) {
@@ -168,14 +168,15 @@ if (!existingTabs.includes(DETAILS_TAB)) {
     spreadsheetId: SPREADSHEET_ID,
     requestBody: { requests: [{ addSheet: { properties: { title: DETAILS_TAB } } }] },
   });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${DETAILS_TAB}!A1`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [DETAILS_HEADERS] },
-  });
-  console.log("  Created 'Campaign Details' tab with headers");
+  console.log("  Created 'Campaign Details' tab");
 }
+// Always overwrite row 1 — fixes stale headers from old code versions
+await sheets.spreadsheets.values.update({
+  spreadsheetId: SPREADSHEET_ID,
+  range: `${DETAILS_TAB}!A1`,
+  valueInputOption: "RAW",
+  requestBody: { values: [DETAILS_HEADERS] },
+});
 
 // Dedup check: date + campaign name composite key
 const existingData = await sheets.spreadsheets.values.get({
