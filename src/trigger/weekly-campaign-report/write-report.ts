@@ -89,7 +89,7 @@ export const writeReportTask = task({
     );
 
     const allRows: (string | number)[][] = payload.campaigns.map((c) => [
-      weekStartDisplay,
+      `'${weekStartDisplay}`, // apostrophe prefix forces Sheets to store as text, not date serial
       c.name,
       c.platform,
       c.status,
@@ -104,7 +104,10 @@ export const writeReportTask = task({
     ]);
 
     const rows = allRows.filter((row) => {
-      const key = `${row[0]}|${row[1]}`;
+      // Strip the apostrophe prefix when building the dedup key — Sheets returns the
+      // raw text "2026-03-30" when reading back, not "'2026-03-30"
+      const dateKey = String(row[0]).replace(/^'/, "");
+      const key = `${dateKey}|${row[1]}`;
       return !existingKeys.has(key);
     });
 

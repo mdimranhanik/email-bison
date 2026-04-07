@@ -194,14 +194,18 @@ function pct(num, den) {
 }
 
 const allRows = campaigns.map(c => [
-  weekStartDisplay, c.name, c.platform, c.status,
+  `'${weekStartDisplay}`, c.name, c.platform, c.status, // apostrophe forces Sheets to store date as text
   c.metrics.sent, c.metrics.uniqueOpens,
   c.metrics.replied, pct(c.metrics.replied, c.metrics.sent),
   c.metrics.bounced, pct(c.metrics.bounced, c.metrics.sent),
   c.metrics.interested, c.metrics.unsubscribed,
 ]);
 
-const newRows = allRows.filter(row => !existingKeys.has(`${row[0]}|${row[1]}`));
+const newRows = allRows.filter(row => {
+  // Strip apostrophe prefix when building dedup key — Sheets returns plain text on read
+  const dateKey = String(row[0]).replace(/^'/, "");
+  return !existingKeys.has(`${dateKey}|${row[1]}`);
+});
 const skipped = allRows.length - newRows.length;
 if (skipped > 0) console.log(`  Skipped ${skipped} duplicate row(s)`);
 
