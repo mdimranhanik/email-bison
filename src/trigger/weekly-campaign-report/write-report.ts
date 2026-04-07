@@ -75,6 +75,17 @@ export const writeReportTask = task({
 
     const weekStartDisplay = formatDate(payload.weekStart);
 
+    // ── Dedup check: skip if this week's data already exists in the sheet ─────
+    const existing = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${DETAILS_TAB}!A:A`, // read Week Start column only
+    });
+    const existingDates = (existing.data.values ?? []).flat();
+    if (existingDates.includes(weekStartDisplay)) {
+      logger.info(`Week ${weekStartDisplay} already exists in sheet — skipping to prevent duplicates`);
+      return { rowsWritten: 0 };
+    }
+
     const rows: (string | number)[][] = payload.campaigns.map((c) => [
       weekStartDisplay,
       c.name,
@@ -91,7 +102,7 @@ export const writeReportTask = task({
     ]);
 
     if (rows.length === 0) {
-      logger.info("No CI/IN campaigns to write for this week");
+      logger.info("No campaigns to write for this week");
       return { rowsWritten: 0 };
     }
 
