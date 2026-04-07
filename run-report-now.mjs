@@ -182,11 +182,13 @@ const existingData = await sheets.spreadsheets.values.get({
   spreadsheetId: SPREADSHEET_ID,
   range: `${DETAILS_TAB}!A:B`,
 });
+const existingValues = existingData.data.values ?? [];
 const existingKeys = new Set(
-  (existingData.data.values ?? [])
+  existingValues
     .filter(row => row[0] && row[1])
     .map(row => `${row[0]}|${row[1]}`)
 );
+const currentRowCount = existingValues.length;
 
 function pct(num, den) {
   if (den === 0) return "N/A";
@@ -201,10 +203,21 @@ const allRows = campaigns.map(c => [
   c.metrics.interested, c.metrics.unsubscribed,
 ]);
 
-const newRows = allRows.filter(row => {
+const deduped = allRows.filter(row => {
   // Strip apostrophe prefix when building dedup key — Sheets returns plain text on read
   const dateKey = String(row[0]).replace(/^'/, "");
   return !existingKeys.has(`${dateKey}|${row[1]}`);
+});
+
+// Inject platform formula with the correct sheet row number for each row.
+const firstNewRow = Math.max(currentRowCount, 1) + 1;
+const newRows = deduped.map((row, i) => {
+  const r = firstNewRow + i;
+  return [
+    ...row.slice(0, 2),
+    `=IFS(ISNUMBER(SEARCH("CI",B${r})),"cheap inboxes",ISNUMBER(SEARCH("CS",B${r})),"custom smtp",ISNUMBER(SEARCH(" I",B${r})),"inboxing",TRUE,"")`,
+    ...row.slice(3),
+  ];
 });
 const skipped = allRows.length - newRows.length;
 if (skipped > 0) console.log(`  Skipped ${skipped} duplicate row(s)`);
