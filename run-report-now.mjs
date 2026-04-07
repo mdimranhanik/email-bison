@@ -147,9 +147,9 @@ console.log(`  ${relevant.length} campaigns relevant to this week`);
 console.log("\n[2/3] Fetching weekly stats per campaign...");
 const campaigns = [];
 for (const c of relevant) {
-  process.stdout.write(`  ${c.name} ... `);
+  process.stdout.write(`  ${c.name}\n`);
   const metrics = await fetchWeeklyStats(c.id);
-  console.log(`sent=${metrics.sent}`);
+  console.log(`    sent=${metrics.sent} | replied=${metrics.replied} | bounced=${metrics.bounced} | interested=${metrics.interested} | unsubscribed=${metrics.unsubscribed}`);
   campaigns.push({ id: c.id, name: c.name, status: c.status, platform: "", metrics });
 }
 
