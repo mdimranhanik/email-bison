@@ -9,14 +9,14 @@ const DETAILS_HEADERS = [
   "Campaign Name",
   "Platform",
   "Status",
-  "Sent (week)",
-  "Unique Opens (week)",
-  "Replied (week)",
+  "Sent",
+  "Unique Opens",  // NOTE: API returns 0 for all campaigns — may never populate
+  "Replied",
   "Reply Rate",
-  "Bounced (week)",
+  "Bounced",
   "Bounce Rate",
-  "Interested (week)",
-  "Unsubscribed (week)",
+  "Interested",
+  "Unsubscribed",
 ];
 
 function pct(numerator: number, denominator: number): string {
