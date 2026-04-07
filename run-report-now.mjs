@@ -30,7 +30,9 @@ const DETAILS_HEADERS = [
   "Week Start", "Campaign Name", "Platform", "Status",
   "Sent (week)", "Unique Opens (week)", "Replied (week)", "Reply Rate",
   "Bounced (week)", "Bounce Rate", "Interested (week)", "Unsubscribed (week)",
+  "Client",
 ];
+const CLIENT_NAME = process.env.CLIENT_NAME ?? "";
 
 if (!API_KEY) throw new Error("EMAIL_BISON_API_KEY not set");
 if (!SA_JSON) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON not set");
@@ -203,6 +205,7 @@ const allRows = campaigns.map(c => [
   c.metrics.replied, pct(c.metrics.replied, c.metrics.sent),
   c.metrics.bounced, pct(c.metrics.bounced, c.metrics.sent),
   c.metrics.interested, c.metrics.unsubscribed,
+  CLIENT_NAME,
 ]);
 
 const deduped = allRows.filter(row => {

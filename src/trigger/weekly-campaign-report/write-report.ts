@@ -17,6 +17,7 @@ const DETAILS_HEADERS = [
   "Bounce Rate",
   "Interested",
   "Unsubscribed",
+  "Client",
 ];
 
 function pct(numerator: number, denominator: number): string {
@@ -62,6 +63,8 @@ export const writeReportTask = task({
     const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
     if (!spreadsheetId) throw new Error("GOOGLE_SHEETS_SPREADSHEET_ID is not set");
 
+    const clientName = process.env.CLIENT_NAME ?? "";
+
     const credentials = JSON.parse(
       Buffer.from(serviceAccountJson, "base64").toString("utf-8")
     );
@@ -103,6 +106,7 @@ export const writeReportTask = task({
       pct(c.metrics.bounced, c.metrics.sent),
       c.metrics.interested,
       c.metrics.unsubscribed,
+      clientName,
     ]);
 
     const deduped = allRows.filter((row) => {
