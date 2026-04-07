@@ -88,13 +88,10 @@ export const writeReportTask = task({
         .filter((row) => row[0] && row[1])
         .map((row) => `${row[0]}|${row[1]}`)
     );
-    // Rows already in the sheet (including header). New rows start after these.
-    const currentRowCount = existingValues.length;
-
     const allRows: (string | number)[][] = payload.campaigns.map((c) => [
       `'${weekStartDisplay}`, // apostrophe prefix forces Sheets to store as text, not date serial
       c.name,
-      c.platform, // placeholder — replaced with formula below once row numbers are known
+      c.platform,
       c.status,
       c.metrics.sent,
       c.metrics.uniqueOpens,
@@ -114,19 +111,7 @@ export const writeReportTask = task({
       return !existingKeys.has(key);
     });
 
-    // Inject platform formula now that we know each row's sheet row number.
-    // Row 1 = header, existing data = rows 2…(currentRowCount), new rows start at currentRowCount+1.
-    // If the sheet is empty (no header yet), ensureTab just created it, so currentRowCount=0 and
-    // the header is at row 1, meaning first new data row is row 2.
-    const firstNewRow = Math.max(currentRowCount, 1) + 1;
-    const rows = deduped.map((row, i) => {
-      const r = firstNewRow + i;
-      return [
-        ...row.slice(0, 2),
-        `=IFS(ISNUMBER(SEARCH("CI",B${r})),"cheap inboxes",ISNUMBER(SEARCH("CS",B${r})),"custom smtp",ISNUMBER(SEARCH(" I",B${r})),"inboxing",TRUE,"")`,
-        ...row.slice(3),
-      ];
-    });
+    const rows = deduped;
 
     if (allRows.length !== rows.length) {
       logger.info(`Skipped ${allRows.length - rows.length} duplicate row(s) already in sheet`);
