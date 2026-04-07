@@ -75,18 +75,20 @@ export const writeReportTask = task({
 
     const weekStartDisplay = formatDate(payload.weekStart);
 
-    // ── Dedup check: skip if this week's data already exists in the sheet ─────
+    // ── Dedup check: skip individual rows already in the sheet ──────────────
+    // Read columns A (Week Start) and B (Campaign Name) to build a composite key set.
+    // A row is a duplicate only if BOTH the date AND the campaign name already exist.
     const existing = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${DETAILS_TAB}!A:A`, // read Week Start column only
+      range: `${DETAILS_TAB}!A:B`, // Week Start + Campaign Name
     });
-    const existingDates = (existing.data.values ?? []).flat();
-    if (existingDates.includes(weekStartDisplay)) {
-      logger.info(`Week ${weekStartDisplay} already exists in sheet — skipping to prevent duplicates`);
-      return { rowsWritten: 0 };
-    }
+    const existingKeys = new Set<string>(
+      (existing.data.values ?? [])
+        .filter((row) => row[0] && row[1])
+        .map((row) => `${row[0]}|${row[1]}`)
+    );
 
-    const rows: (string | number)[][] = payload.campaigns.map((c) => [
+    const allRows: (string | number)[][] = payload.campaigns.map((c) => [
       weekStartDisplay,
       c.name,
       c.platform,
@@ -101,8 +103,17 @@ export const writeReportTask = task({
       c.metrics.unsubscribed,
     ]);
 
+    const rows = allRows.filter((row) => {
+      const key = `${row[0]}|${row[1]}`;
+      return !existingKeys.has(key);
+    });
+
+    if (allRows.length !== rows.length) {
+      logger.info(`Skipped ${allRows.length - rows.length} duplicate row(s) already in sheet`);
+    }
+
     if (rows.length === 0) {
-      logger.info("No campaigns to write for this week");
+      logger.info("No new campaigns to write for this week");
       return { rowsWritten: 0 };
     }
 
