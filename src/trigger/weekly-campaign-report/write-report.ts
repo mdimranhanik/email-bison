@@ -9,15 +9,14 @@ const DETAILS_HEADERS = [
   "Campaign Name",
   "Platform",
   "Status",
-  "Emails Sent",
-  "Unique Opens",
-  "Unique Replies",
+  "Sent (week)",
+  "Unique Opens (week)",
+  "Replied (week)",
   "Reply Rate",
-  "Bounced",
+  "Bounced (week)",
   "Bounce Rate",
-  "Interested",
-  "Unsubscribed",
-  "Leads Contacted",
+  "Interested (week)",
+  "Unsubscribed (week)",
 ];
 
 function pct(numerator: number, denominator: number): string {
@@ -83,13 +82,12 @@ export const writeReportTask = task({
       c.status,
       c.metrics.sent,
       c.metrics.uniqueOpens,
-      c.metrics.uniqueReplies,
-      pct(c.metrics.uniqueReplies, c.metrics.sent),
+      c.metrics.replied,
+      pct(c.metrics.replied, c.metrics.sent),
       c.metrics.bounced,
       pct(c.metrics.bounced, c.metrics.sent),
       c.metrics.interested,
       c.metrics.unsubscribed,
-      c.metrics.leadsContacted,
     ]);
 
     if (rows.length === 0) {

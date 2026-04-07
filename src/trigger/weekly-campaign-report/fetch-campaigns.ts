@@ -11,12 +11,6 @@ export interface EBCampaign {
   id: number;
   name: string;
   status: string;
-  emails_sent: number;
-  unique_opens: number;
-  unique_replies: number;
-  bounced: number;
-  unsubscribed: number;
-  interested: number;
   total_leads_contacted: number;
   created_at: string;
   updated_at: string;
@@ -29,12 +23,17 @@ export interface EBListResponse {
   meta?: { current_page: number; last_page: number; total: number };
 }
 
-export type Platform = string; // derived from campaign name, can be refined via sheet formulas
+// Daily stats from /line-area-chart-stats endpoint
+// Each entry: { label: "Sent", dates: [["2026-04-01", 120], ...] }
+interface EBStatSeries {
+  label: string;
+  dates: [string, number][];
+}
 
 export interface CampaignMetrics {
   sent: number;
   uniqueOpens: number;
-  uniqueReplies: number;
+  replied: number;
   bounced: number;
   interested: number;
   unsubscribed: number;
@@ -45,7 +44,7 @@ export interface ProcessedCampaign {
   id: number;
   name: string;
   status: string;
-  platform: Platform;
+  platform: string;
   metrics: CampaignMetrics;
 }
 
@@ -84,17 +83,44 @@ async function apiFetch(url: string, apiKey: string): Promise<Response> {
   throw lastError ?? new Error(`Email Bison API failed after 3 attempts: ${url}`);
 }
 
+function toDateStr(iso: string): string {
+  return iso.split("T")[0]; // "2026-03-30T00:00:00.000Z" → "2026-03-30"
+}
 
-function extractMetrics(c: EBCampaign): CampaignMetrics {
-  return {
-    sent: c.emails_sent ?? 0,
-    uniqueOpens: c.unique_opens ?? 0,
-    uniqueReplies: c.unique_replies ?? 0,
-    bounced: c.bounced ?? 0,
-    interested: c.interested ?? 0,
-    unsubscribed: c.unsubscribed ?? 0,
-    leadsContacted: c.total_leads_contacted ?? 0,
-  };
+// Sum all daily values in a series across the date range
+function sumSeries(series: EBStatSeries[], label: string): number {
+  const s = series.find((s) => s.label.toLowerCase() === label.toLowerCase());
+  if (!s) return 0;
+  return s.dates.reduce((acc, [, val]) => acc + (val ?? 0), 0);
+}
+
+// Fetch weekly stats for a single campaign using the date-filtered endpoint
+async function fetchWeeklyStats(
+  BASE_URL: string,
+  apiKey: string,
+  campaignId: number,
+  startDate: string,
+  endDate: string
+): Promise<CampaignMetrics> {
+  try {
+    const url = `${BASE_URL}/campaigns/${campaignId}/line-area-chart-stats?start_date=${startDate}&end_date=${endDate}`;
+    const res = await apiFetch(url, apiKey);
+    const body = (await res.json()) as { data: EBStatSeries[] };
+    const series = body.data ?? [];
+
+    return {
+      sent: sumSeries(series, "Sent"),
+      uniqueOpens: sumSeries(series, "Unique Opens"),
+      replied: sumSeries(series, "Replied"),
+      bounced: sumSeries(series, "Bounced"),
+      interested: sumSeries(series, "Interested"),
+      unsubscribed: sumSeries(series, "Unsubscribed"),
+      leadsContacted: 0, // not available from this endpoint
+    };
+  } catch {
+    logger.warn(`Could not fetch weekly stats for campaign ${campaignId}, using zeros`);
+    return { sent: 0, uniqueOpens: 0, replied: 0, bounced: 0, interested: 0, unsubscribed: 0, leadsContacted: 0 };
+  }
 }
 
 // ─── Task ─────────────────────────────────────────────────────────────────────
@@ -110,9 +136,13 @@ export const fetchCampaignsTask = task({
     const weekStartDate = new Date(weekStart);
     const weekEndDate = new Date(weekEnd);
 
+    // Date strings for the stats endpoint (YYYY-MM-DD)
+    const startDate = toDateStr(weekStart);
+    const endDate = toDateStr(weekEnd);
+
     logger.info("Fetching campaigns", { weekStart, weekEnd });
 
-    // ── Paginate all campaigns ────────────────────────────────────────────────
+    // ── Step 1: Paginate all campaigns ────────────────────────────────────────
     const allCampaigns: EBCampaign[] = [];
     let page = 1;
     const MAX_PAGES = 500;
@@ -127,36 +157,46 @@ export const fetchCampaignsTask = task({
 
     logger.info(`Fetched ${allCampaigns.length} campaigns across ${page} page(s)`);
 
-    // ── Filter campaigns relevant to this week (deduped by campaign id) ─────────
-    // - "active"             → always include (currently running)
-    // - "completed"/"paused" → include only if updated_at is within the week window
-    // - everything else      → skip (draft, archived)
+    // ── Step 2: Filter to relevant campaigns ─────────────────────────────────
+    // - "active"                              → always include
+    // - "completed"/"paused"/"archived"       → only if updated this week
+    // - "draft" and anything else             → skip
     const seenIds = new Set<number>();
-    const campaigns: ProcessedCampaign[] = [];
+    const relevantCampaigns: EBCampaign[] = [];
 
     for (const c of allCampaigns) {
-      if (seenIds.has(c.id)) continue; // dedup
+      if (seenIds.has(c.id)) continue;
 
       if (c.status === "active") {
-        // live right now — always relevant
+        // always relevant
       } else if (c.status === "completed" || c.status === "paused" || c.status === "archived") {
         const updated = new Date(c.updated_at);
         if (updated < weekStartDate || updated >= weekEndDate) continue;
       } else {
-        continue; // draft and anything else
+        continue;
       }
 
       seenIds.add(c.id);
+      relevantCampaigns.push(c);
+    }
+
+    logger.info(`${relevantCampaigns.length} campaigns relevant to this week — fetching weekly stats`);
+
+    // ── Step 3: Fetch actual weekly stats per campaign (sequentially) ─────────
+    const campaigns: ProcessedCampaign[] = [];
+
+    for (const c of relevantCampaigns) {
+      const metrics = await fetchWeeklyStats(BASE_URL, apiKey, c.id, startDate, endDate);
       campaigns.push({
         id: c.id,
         name: c.name,
         status: c.status,
         platform: "",
-        metrics: extractMetrics(c),
+        metrics,
       });
     }
 
-    logger.info(`${campaigns.length} active campaigns in reporting window`);
+    logger.info(`Weekly stats fetched for ${campaigns.length} campaigns`);
 
     return { weekStart, weekEnd, campaigns };
   },

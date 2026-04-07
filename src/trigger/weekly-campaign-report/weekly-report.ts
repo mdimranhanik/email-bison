@@ -12,13 +12,18 @@ export const weeklyReportTask = schedules.task({
     // weekEnd   = this Monday 00:00 UTC
     // weekStart = last Monday 00:00 UTC (7 days prior)
     const now = new Date(payload.timestamp);
-    const weekEnd = new Date(
+    // Cron fires Monday 9am UTC
+    // weekEnd   = this Monday 00:00 UTC (exclusive, = yesterday Sunday 23:59)
+    // weekStart = last Monday 00:00 UTC
+    // This gives Mon 00:00 → Sun 23:59 — matching Email Bison dashboard (Mon→Sun)
+    const thisMonday = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
     );
-    const weekStart = new Date(weekEnd.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const weekStart = new Date(thisMonday.getTime() - 7 * 24 * 60 * 60 * 1000); // last Monday
+    const weekEnd = new Date(thisMonday.getTime() - 1); // Sunday 23:59:59.999 UTC
 
-    const weekStartISO = weekStart.toISOString();
-    const weekEndISO = weekEnd.toISOString();
+    const weekStartISO = weekStart.toISOString(); // e.g. 2026-03-30T00:00:00.000Z
+    const weekEndISO = weekEnd.toISOString();     // e.g. 2026-04-05T23:59:59.999Z
 
     logger.info("Starting weekly campaign report", { weekStartISO, weekEndISO });
 
