@@ -49,15 +49,10 @@ export interface ProcessedCampaign {
 }
 
 export interface ReportPayload {
-  date: string; // reporting day, YYYY-MM-DD (UTC)
+  weekStart: string;
+  weekEnd: string;
   campaigns: ProcessedCampaign[];
 }
-
-// Non-active campaigns (completed/paused/archived) are included if they were
-// updated within this many days up to the reporting day — so late replies on a
-// recently finished campaign are still counted on the day they arrive.
-const LOOKBACK_DAYS = 7;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -88,6 +83,10 @@ async function apiFetch(url: string, apiKey: string): Promise<Response> {
   throw lastError ?? new Error(`Email Bison API failed after 3 attempts: ${url}`);
 }
 
+function toDateStr(iso: string): string {
+  return iso.split("T")[0]; // "2026-03-30T00:00:00.000Z" → "2026-03-30"
+}
+
 // Sum all daily values in a series across the date range
 function sumSeries(series: EBStatSeries[], label: string): number {
   const s = series.find((s) => s.label.toLowerCase() === label.toLowerCase());
@@ -95,8 +94,8 @@ function sumSeries(series: EBStatSeries[], label: string): number {
   return s.dates.reduce((acc, [, val]) => acc + (val ?? 0), 0);
 }
 
-// Fetch stats for a single campaign using the date-filtered endpoint
-async function fetchStats(
+// Fetch weekly stats for a single campaign using the date-filtered endpoint
+async function fetchWeeklyStats(
   BASE_URL: string,
   apiKey: string,
   campaignId: number,
@@ -119,7 +118,7 @@ async function fetchStats(
       leadsContacted: 0, // not available from this endpoint
     };
   } catch {
-    logger.warn(`Could not fetch stats for campaign ${campaignId}, using zeros`);
+    logger.warn(`Could not fetch weekly stats for campaign ${campaignId}, using zeros`);
     return { sent: 0, uniqueOpens: 0, replied: 0, bounced: 0, interested: 0, unsubscribed: 0, leadsContacted: 0 };
   }
 }
@@ -128,26 +127,20 @@ async function fetchStats(
 
 export const fetchCampaignsTask = task({
   id: "fetch-email-bison-campaigns",
-  run: async (payload: { date: string }): Promise<ReportPayload> => {
+  run: async (payload: { weekStart: string; weekEnd: string }): Promise<ReportPayload> => {
     const apiKey = process.env.EMAIL_BISON_API_KEY;
     if (!apiKey) throw new Error("EMAIL_BISON_API_KEY is not set");
 
     const BASE_URL = getBaseUrl();
-    const { date } = payload; // YYYY-MM-DD
-    const dayStart = new Date(`${date}T00:00:00.000Z`);
-    const dayEnd = new Date(`${date}T23:59:59.999Z`);
-    const lookbackStart = new Date(dayStart.getTime() - (LOOKBACK_DAYS - 1) * DAY_MS);
-    // Weekends are not reported on their own: Monday's row also covers Saturday + Sunday
-    const statsFrom =
-      dayStart.getUTCDay() === 1
-        ? new Date(dayStart.getTime() - 2 * DAY_MS).toISOString().split("T")[0]
-        : date;
+    const { weekStart, weekEnd } = payload;
+    const weekStartDate = new Date(weekStart);
+    const weekEndDate = new Date(weekEnd);
 
-    logger.info("Fetching campaigns", {
-      date,
-      statsFrom,
-      lookbackStart: lookbackStart.toISOString(),
-    });
+    // Date strings for the stats endpoint (YYYY-MM-DD)
+    const startDate = toDateStr(weekStart);
+    const endDate = toDateStr(weekEnd);
+
+    logger.info("Fetching campaigns", { weekStart, weekEnd });
 
     // ── Step 1: Paginate all campaigns ────────────────────────────────────────
     const allCampaigns: EBCampaign[] = [];
@@ -166,7 +159,7 @@ export const fetchCampaignsTask = task({
 
     // ── Step 2: Filter to relevant campaigns ─────────────────────────────────
     // - "active"                              → always include
-    // - "completed"/"paused"/"archived"       → only if updated in the last LOOKBACK_DAYS
+    // - "completed"/"paused"/"archived"       → only if updated this week
     // - "draft" and anything else             → skip
     const seenIds = new Set<number>();
     const relevantCampaigns: EBCampaign[] = [];
@@ -178,7 +171,7 @@ export const fetchCampaignsTask = task({
         // always relevant
       } else if (c.status === "completed" || c.status === "paused" || c.status === "archived") {
         const updated = new Date(c.updated_at);
-        if (updated < lookbackStart || updated > dayEnd) continue;
+        if (updated < weekStartDate || updated >= weekEndDate) continue;
       } else {
         continue;
       }
@@ -187,23 +180,13 @@ export const fetchCampaignsTask = task({
       relevantCampaigns.push(c);
     }
 
-    logger.info(`${relevantCampaigns.length} campaigns relevant to ${date} — fetching stats ${statsFrom} → ${date}`);
+    logger.info(`${relevantCampaigns.length} campaigns relevant to this week — fetching weekly stats`);
 
-    // ── Step 3: Fetch stats for the reporting day per campaign (sequentially) ─
+    // ── Step 3: Fetch actual weekly stats per campaign (sequentially) ─────────
     const campaigns: ProcessedCampaign[] = [];
-    let skippedEmpty = 0;
 
     for (const c of relevantCampaigns) {
-      const metrics = await fetchStats(BASE_URL, apiKey, c.id, statsFrom, date);
-      // Non-active campaigns are only pulled in by the lookback — skip them on
-      // days with no activity so the sheet isn't filled with all-zero rows.
-      const hasActivity =
-        metrics.sent + metrics.uniqueOpens + metrics.replied + metrics.bounced +
-          metrics.interested + metrics.unsubscribed > 0;
-      if (c.status !== "active" && !hasActivity) {
-        skippedEmpty++;
-        continue;
-      }
+      const metrics = await fetchWeeklyStats(BASE_URL, apiKey, c.id, startDate, endDate);
       campaigns.push({
         id: c.id,
         name: c.name,
@@ -213,10 +196,8 @@ export const fetchCampaignsTask = task({
       });
     }
 
-    logger.info(`Daily stats fetched for ${campaigns.length} campaigns`, {
-      skippedInactiveWithNoActivity: skippedEmpty,
-    });
+    logger.info(`Weekly stats fetched for ${campaigns.length} campaigns`);
 
-    return { date, campaigns };
+    return { weekStart, weekEnd, campaigns };
   },
 });

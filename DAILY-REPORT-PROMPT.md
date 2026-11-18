@@ -1,21 +1,21 @@
-# Prompt: switch an Email Bison report from weekly to daily
+# Prompt: add a daily Email Bison report alongside the weekly one
 
 Paste everything below the line into a new chat opened in the workspace's repo.
 
 ---
 
-This repo has a Trigger.dev task that pulls Email Bison campaign stats and writes them to Google Sheets **once a week**. I want it switched to **daily**, the same way it was already done for another workspace. Follow the process below. Ask me before anything that needs my decision, and confirm with me before you push to `main` (pushing deploys to production).
+This repo has a Trigger.dev task that pulls Email Bison campaign stats and writes them to Google Sheets **once a week**. I want to **add a daily report next to it**, the same way it was already done for another workspace. **The weekly report must keep running exactly as it is**, writing to its current spreadsheet. Follow the process below. Ask me before anything that needs my decision, and confirm with me before you push to `main` (pushing deploys to production).
 
 ## The target
 
-- **Spreadsheet:** "Bison Report- Daily", ID `19EcD68jl_vBELJABXJsw1lftazVzgOqPGaLbLzPhQeI`
+- **Daily spreadsheet:** "Bison Report- Daily", ID `19EcD68jl_vBELJABXJsw1lftazVzgOqPGaLbLzPhQeI`
   (https://docs.google.com/spreadsheets/d/19EcD68jl_vBELJABXJsw1lftazVzgOqPGaLbLzPhQeI/edit)
 - **Tab:** ask me which tab belongs to this workspace. Don't guess, and don't create a new tab unless I say so.
-- The old weekly data stays where it is, in the old spreadsheet. Don't touch it.
+- **Weekly report:** leave its code, task ids, cron, env vars and spreadsheet untouched. The daily report is a separate, additional task.
 
 ## The rules I decided on
 
-1. **Schedule:** Tuesday to Saturday at **3 PM Bangladesh time**. Bangladesh is UTC+6 with no daylight saving, so that's 09:00 UTC: cron `0 9 * * 2-6`. If this repo runs several projects that share an API or the sheet, ask me whether to stagger them (e.g. 09:00, 09:15, …).
+1. **Schedule:** Tuesday to Saturday at **3 PM Bangladesh time**. Bangladesh is UTC+6 with no daylight saving, so that's 09:00 UTC: cron `0 9 * * 2-6`. The weekly report keeps its own Monday schedule; the two never run on the same day if the weekly one runs Mondays. If this repo runs several projects that share an API or the sheet, ask me whether to stagger them (e.g. 09:00, 09:15, …).
 2. **Each run reports the previous UTC day.** Tuesday's run reports Monday, and Saturday's run reports Friday.
 3. **Weekends are folded into Monday.** Replies do arrive on Saturday and Sunday, so Monday's row covers stats from **Saturday through Monday** and is labelled with Monday's date. Saturday and Sunday never get rows of their own.
 4. **Late replies:** active campaigns are always included. Completed, paused and archived campaigns are included if their `updated_at` falls within the **7 days** up to the reporting day. Skip their row on days when every number is 0. Active campaigns are written even with all zeros.
@@ -38,9 +38,13 @@ Use the service account from `GOOGLE_SERVICE_ACCOUNT_JSON` with the `spreadsheet
 
 ### 3. Code changes
 
-**Orchestrator (scheduled task):**
-- Keep the **task id unchanged**, so Trigger.dev keeps the same schedule and run history.
-- Set the cron to `0 9 * * 2-6`, or the agreed slot, through the env var if that's how this repo does it.
+**Structure: add, don't replace.**
+- Copy the weekly task folder to a new `src/trigger/daily-campaign-report/` folder (orchestrator → `daily-report.ts`, plus its own `fetch-campaigns.ts` and `write-report.ts`), then change only the copies.
+- Give all three daily tasks **new, unique task ids**, e.g. `daily-email-bison-report`, `fetch-email-bison-campaigns-daily`, `write-daily-report-to-sheets`, and rename their exports (`dailyReportTask`, `fetchDailyCampaignsTask`, `writeDailyReportTask`). Trigger.dev identifies tasks by id, so reusing a weekly id would replace the weekly task.
+- Don't edit any weekly file. Before committing, confirm with `git diff` that the weekly folder has no changes.
+
+**Daily orchestrator (scheduled task):**
+- Set the cron to `0 9 * * 2-6`, or the agreed slot. If the weekly cron comes from an env var (e.g. `CRON_SCHEDULE`), **don't reuse it**: changing it would move the weekly report. Hard-code the daily cron, or use a separate env var such as `DAILY_CRON_SCHEDULE`, and tell me.
 - Reporting day = the previous UTC day:
   ```ts
   const DAY_MS = 24 * 60 * 60 * 1000;
@@ -66,7 +70,7 @@ Use the service account from `GOOGLE_SERVICE_ACCOUNT_JSON` with the `spreadsheet
 - Return `{ date, campaigns }`.
 
 **Write task:**
-- Spreadsheet ID: `process.env.GOOGLE_SHEETS_DAILY_SPREADSHEET_ID || "19EcD68jl_vBELJABXJsw1lftazVzgOqPGaLbLzPhQeI"`. This way the old `GOOGLE_SHEETS_SPREADSHEET_ID` doesn't need changing and can't accidentally point the daily data at the old sheet.
+- Spreadsheet ID: `process.env.GOOGLE_SHEETS_DAILY_SPREADSHEET_ID || "19EcD68jl_vBELJABXJsw1lftazVzgOqPGaLbLzPhQeI"`. **Never change `GOOGLE_SHEETS_SPREADSHEET_ID`**: the weekly report uses it to write to its own spreadsheet.
 - Tab: the one I confirm (or the repo's `TAB_NAME` env var if it already uses one). **Quote the tab name in A1 notation:** `'${tab}'!A:B`. Names with spaces or hyphens fail unquoted.
 - Column layout (row 1 is rewritten every run to self-heal):
 
@@ -101,7 +105,7 @@ Use the service account from `GOOGLE_SERVICE_ACCOUNT_JSON` with the `spreadsheet
   ```
 - Dedup: read `A:B` and skip any row whose `Date|Campaign Name` already exists (strip the leading apostrophe when comparing). Append with `valueInputOption: "USER_ENTERED"`, `insertDataOption: "INSERT_ROWS"`, range `'${tab}'!A:N`.
 
-**Local "run now" script (if the repo has one):** bring it in line with the same logic. It should accept no args (yesterday), one date, or a `start end` range that loops day by day. When looping, skip Saturday and Sunday and apply the Monday Sat→Mon window.
+**Local "run now" script:** if the repo has a weekly one, keep it as is (rename it to `run-weekly-report-now.mjs` if that helps clarity). Add a separate `run-daily-report-now.mjs` with the daily logic. It should accept no args (yesterday), one date, or a `start end` range that loops day by day. When looping, skip Saturday and Sunday and apply the Monday Sat→Mon window.
 
 ### 4. Test before deploying
 1. `npx tsc --noEmit -p .` must pass, and `node --check` must pass on any `.mjs` script.
@@ -112,7 +116,7 @@ Use the service account from `GOOGLE_SERVICE_ACCOUNT_JSON` with the `spreadsheet
 
 ### 5. Deploy
 - Commit with a clear message and **ask me before pushing to `main`**. Pushing auto-deploys to Trigger.dev.
-- Then tell me to check two things in the Trigger.dev dashboard: (a) **Deployments**: the new commit finished deploying; (b) **Schedules**: the task shows the new cron and the next run time. Also list any env vars I need to set or change there (e.g. `CRON_SCHEDULE`, `CLIENT_NAME`, `GOOGLE_SHEETS_DAILY_SPREADSHEET_ID`).
+- Then tell me to check two things in the Trigger.dev dashboard: (a) **Deployments**: the new commit finished deploying; (b) **Schedules**: there are now **two** schedules, the weekly one unchanged and the new daily one (`0 9 * * 2-6`) with its next run time. Also list any env vars I need to set or change there (e.g. `CRON_SCHEDULE`, `CLIENT_NAME`, `GOOGLE_SHEETS_DAILY_SPREADSHEET_ID`).
 - Expect this: if you backfilled yesterday, the first scheduled run reports that same day and writes **0 rows**, because the rows are already there. That's correct.
 
 ### 6. Report back

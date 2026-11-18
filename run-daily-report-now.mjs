@@ -3,9 +3,9 @@
  * Writes one set of rows per day to the "Bison Report- Daily" sheet.
  *
  * Usage:
- *   node run-report-now.mjs                         → yesterday (UTC)
- *   node run-report-now.mjs 2026-11-17              → one day
- *   node run-report-now.mjs 2026-11-16 2026-11-17   → every day in the range (backfill)
+ *   node run-daily-report-now.mjs                   → yesterday (UTC)
+ *   node run-daily-report-now.mjs 2026-11-17        → one day
+ *   node run-daily-report-now.mjs 2026-11-16 2026-11-17 → every day in the range (backfill)
  *
  * Re-running a day is safe: rows already in the sheet (same Date + Campaign Name) are skipped.
  */
