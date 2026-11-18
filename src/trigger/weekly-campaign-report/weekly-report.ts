@@ -2,36 +2,26 @@ import { schedules, logger } from "@trigger.dev/sdk/v3";
 import { fetchCampaignsTask } from "./fetch-campaigns.js";
 import { writeReportTask } from "./write-report.js";
 
-export const weeklyReportTask = schedules.task({
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Task id kept as "weekly-email-bison-report" so Trigger.dev keeps the same task,
+// schedule and run history — it now runs DAILY.
+export const dailyReportTask = schedules.task({
   id: "weekly-email-bison-report",
-  // Every Monday at 9:00 AM UTC
-  cron: "0 9 * * 1",
+  // Every day at 09:00 UTC = 3:00 PM Bangladesh time (Asia/Dhaka, UTC+6, no DST)
+  // Reports on the previous full UTC day
+  cron: "0 9 * * *",
   run: async (payload) => {
-    // ── Compute the Mon→Mon reporting window ──────────────────────────────────
-    // payload.timestamp is the scheduled fire time (this Monday 9:00 AM UTC)
-    // weekEnd   = this Monday 00:00 UTC
-    // weekStart = last Monday 00:00 UTC (7 days prior)
+    // ── Reporting day = yesterday (UTC) ───────────────────────────────────────
+    // payload.timestamp is the scheduled fire time (today 09:00 UTC)
     const now = new Date(payload.timestamp);
-    // Cron fires Monday 9am UTC
-    // weekEnd   = this Monday 00:00 UTC (exclusive, = yesterday Sunday 23:59)
-    // weekStart = last Monday 00:00 UTC
-    // This gives Mon 00:00 → Sun 23:59 — matching Email Bison dashboard (Mon→Sun)
-    const thisMonday = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-    );
-    const weekStart = new Date(thisMonday.getTime() - 7 * 24 * 60 * 60 * 1000); // last Monday
-    const weekEnd = new Date(thisMonday.getTime() - 1); // Sunday 23:59:59.999 UTC
+    const todayMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const date = new Date(todayMidnight - DAY_MS).toISOString().split("T")[0]; // e.g. 2026-11-17
 
-    const weekStartISO = weekStart.toISOString(); // e.g. 2026-03-30T00:00:00.000Z
-    const weekEndISO = weekEnd.toISOString();     // e.g. 2026-04-05T23:59:59.999Z
-
-    logger.info("Starting weekly campaign report", { weekStartISO, weekEndISO });
+    logger.info("Starting daily campaign report", { date });
 
     // ── Fetch campaigns ───────────────────────────────────────────────────────
-    const fetchResult = await fetchCampaignsTask.triggerAndWait({
-      weekStart: weekStartISO,
-      weekEnd: weekEndISO,
-    });
+    const fetchResult = await fetchCampaignsTask.triggerAndWait({ date });
 
     if (!fetchResult.ok) {
       throw new Error(`fetch-campaigns task failed: ${fetchResult.error}`);
@@ -42,9 +32,9 @@ export const weeklyReportTask = schedules.task({
     logger.info("Campaigns fetched", { total: reportPayload.campaigns.length });
 
     // ── Write to Google Sheets ────────────────────────────────────────────────
-    // idempotencyKey prevents duplicate rows if this run is retried on the same Monday
+    // idempotencyKey prevents duplicate rows if this run is retried on the same day
     const writeResult = await writeReportTask.triggerAndWait(reportPayload, {
-      idempotencyKey: `weekly-report-${weekStartISO}`,
+      idempotencyKey: `daily-report-${date}`,
     });
 
     if (!writeResult.ok) {
@@ -53,16 +43,14 @@ export const weeklyReportTask = schedules.task({
 
     const { rowsWritten } = writeResult.output;
 
-    logger.info("Weekly report complete", {
-      weekStart: weekStartISO,
-      weekEnd: weekEndISO,
+    logger.info("Daily report complete", {
+      date,
       campaignsReported: reportPayload.campaigns.length,
       rowsWrittenToSheets: rowsWritten,
     });
 
     return {
-      weekStart: weekStartISO,
-      weekEnd: weekEndISO,
+      date,
       campaignsReported: reportPayload.campaigns.length,
       rowsWrittenToSheets: rowsWritten,
     };

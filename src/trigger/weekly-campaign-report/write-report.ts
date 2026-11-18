@@ -2,10 +2,16 @@ import { task, logger } from "@trigger.dev/sdk/v3";
 import { google } from "googleapis";
 import type { ReportPayload } from "./fetch-campaigns.js";
 
+// Daily rows go to the separate "Bison Report- Daily" spreadsheet, first tab.
+// The old weekly data stays untouched in the original "Bison Report" spreadsheet.
+// Override with the GOOGLE_SHEETS_DAILY_SPREADSHEET_ID env var if the sheet ever moves.
+const DEFAULT_DAILY_SPREADSHEET_ID = "19EcD68jl_vBELJABXJsw1lftazVzgOqPGaLbLzPhQeI";
 const DETAILS_TAB = "Campaign Details";
+// Quoted for A1 notation — the tab name contains spaces and a hyphen
+const TAB_REF = `'${DETAILS_TAB}'`;
 
 const DETAILS_HEADERS = [
-  "Week Start",
+  "Date",
   "Campaign Name",
   "Platform",
   "Status",
@@ -18,7 +24,21 @@ const DETAILS_HEADERS = [
   "Interested",
   "Unsubscribed",
   "Client",
+  "Aged Status",
 ];
+
+// Platform (C) and Aged Status (N) are derived from the campaign name here in code
+// (same rules as the old sheet ARRAYFORMULAs — formulas there break with #REF!
+// because the script writes into the same columns).
+function platformFor(name: string): string {
+  if (/\bSMTP\b/i.test(name)) return "Custom SMTP";
+  if (/\bIN\b/i.test(name)) return "inboxing";
+  if (/\bCI\b/i.test(name)) return "cheapinboxes";
+  return "";
+}
+function agedStatusFor(name: string): string {
+  return /\(ag/i.test(name) ? "AGED" : "not aged";
+}
 
 function pct(numerator: number, denominator: number): string {
   if (denominator === 0) return "N/A";
@@ -26,31 +46,25 @@ function pct(numerator: number, denominator: number): string {
   return "'" + ((numerator / denominator) * 100).toFixed(1) + "%";
 }
 
-function formatDate(iso: string): string {
-  return iso.split("T")[0];
-}
-
 async function ensureTab(
   sheets: ReturnType<typeof google.sheets>,
-  spreadsheetId: string,
-  tabName: string,
-  headers: string[]
+  spreadsheetId: string
 ): Promise<void> {
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const existing = (meta.data.sheets ?? []).map((s) => s.properties?.title ?? "");
-  if (!existing.includes(tabName)) {
+  if (!existing.includes(DETAILS_TAB)) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
-      requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+      requestBody: { requests: [{ addSheet: { properties: { title: DETAILS_TAB } } }] },
     });
-    logger.info(`Created tab: ${tabName}`);
+    logger.info(`Created tab: ${DETAILS_TAB}`);
   }
   // Always overwrite row 1 with current headers — fixes stale headers from old code versions
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${tabName}!A1`,
+    range: `${TAB_REF}!A1`,
     valueInputOption: "RAW",
-    requestBody: { values: [headers] },
+    requestBody: { values: [DETAILS_HEADERS] },
   });
 }
 
@@ -60,8 +74,8 @@ export const writeReportTask = task({
     const serviceAccountJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
     if (!serviceAccountJson) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
 
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    if (!spreadsheetId) throw new Error("GOOGLE_SHEETS_SPREADSHEET_ID is not set");
+    const spreadsheetId =
+      process.env.GOOGLE_SHEETS_DAILY_SPREADSHEET_ID || DEFAULT_DAILY_SPREADSHEET_ID;
 
     const clientName = process.env.CLIENT_NAME ?? "";
 
@@ -76,16 +90,14 @@ export const writeReportTask = task({
 
     const sheets = google.sheets({ version: "v4", auth });
 
-    await ensureTab(sheets, spreadsheetId, DETAILS_TAB, DETAILS_HEADERS);
-
-    const weekStartDisplay = formatDate(payload.weekStart);
+    await ensureTab(sheets, spreadsheetId);
 
     // ── Dedup check: skip individual rows already in the sheet ──────────────
-    // Read columns A (Week Start) and B (Campaign Name) to build a composite key set.
+    // Read columns A (Date) and B (Campaign Name) to build a composite key set.
     // A row is a duplicate only if BOTH the date AND the campaign name already exist.
     const existing = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${DETAILS_TAB}!A:B`, // Week Start + Campaign Name
+      range: `${TAB_REF}!A:B`,
     });
     const existingValues = existing.data.values ?? [];
     const existingKeys = new Set<string>(
@@ -94,9 +106,9 @@ export const writeReportTask = task({
         .map((row) => `${row[0]}|${row[1]}`)
     );
     const allRows: (string | number)[][] = payload.campaigns.map((c) => [
-      `'${weekStartDisplay}`, // apostrophe prefix forces Sheets to store as text, not date serial
+      `'${payload.date}`, // apostrophe prefix forces Sheets to store as text, not date serial
       c.name,
-      c.platform,
+      platformFor(c.name),
       c.status,
       c.metrics.sent,
       c.metrics.uniqueOpens,
@@ -107,6 +119,7 @@ export const writeReportTask = task({
       c.metrics.interested,
       c.metrics.unsubscribed,
       clientName,
+      agedStatusFor(c.name),
     ]);
 
     const deduped = allRows.filter((row) => {
@@ -122,19 +135,21 @@ export const writeReportTask = task({
     }
 
     if (deduped.length === 0) {
-      logger.info("No new campaigns to write for this week");
+      logger.info(`No new campaigns to write for ${payload.date}`);
       return { rowsWritten: 0 };
     }
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: DETAILS_TAB,
+      range: `${TAB_REF}!A:N`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: deduped },
     });
 
-    logger.info(`Wrote ${deduped.length} campaign rows to Google Sheets`, { spreadsheetId });
+    logger.info(`Wrote ${deduped.length} campaign rows for ${payload.date} to Google Sheets`, {
+      spreadsheetId,
+    });
 
     return { rowsWritten: deduped.length };
   },
