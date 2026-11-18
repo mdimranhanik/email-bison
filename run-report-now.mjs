@@ -68,9 +68,12 @@ const first = process.argv[2] ?? yesterdayUTC();
 const last = process.argv[3] ?? first;
 const dates = [];
 for (let t = Date.parse(`${first}T00:00:00Z`); t <= Date.parse(`${last}T00:00:00Z`); t += DAY_MS) {
-  dates.push(new Date(t).toISOString().split("T")[0]);
+  const d = new Date(t);
+  // Sat (6) / Sun (0) are not reported on their own — Monday's row covers them
+  if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+  dates.push(d.toISOString().split("T")[0]);
 }
-if (dates.length === 0) throw new Error(`Bad date range: ${first} → ${last}`);
+if (dates.length === 0) throw new Error(`No weekdays in range: ${first} → ${last} (Sat/Sun are folded into Monday)`);
 
 // ── Email Bison helpers ───────────────────────────────────────────────────────
 async function apiFetch(url) {
@@ -100,9 +103,9 @@ function sumSeries(series, label) {
   return s.dates.reduce((acc, [, val]) => acc + (val ?? 0), 0);
 }
 
-async function fetchStats(campaignId, date) {
+async function fetchStats(campaignId, from, date) {
   try {
-    const url = `${BASE_URL}/campaigns/${campaignId}/line-area-chart-stats?start_date=${date}&end_date=${date}`;
+    const url = `${BASE_URL}/campaigns/${campaignId}/line-area-chart-stats?start_date=${from}&end_date=${date}`;
     const body = await (await apiFetch(url)).json();
     const series = body.data ?? [];
     return {
@@ -161,7 +164,11 @@ await sheets.spreadsheets.values.update({
 
 // ── One pass per day ──────────────────────────────────────────────────────────
 for (const date of dates) {
-  console.log(`\n=== ${date} ===`);
+  // Monday's row also covers Saturday + Sunday (weekends aren't reported on their own)
+  const statsFrom = new Date(`${date}T00:00:00Z`).getUTCDay() === 1
+    ? new Date(Date.parse(`${date}T00:00:00Z`) - 2 * DAY_MS).toISOString().split("T")[0]
+    : date;
+  console.log(`\n=== ${date}${statsFrom !== date ? ` (stats ${statsFrom} → ${date}, incl. weekend)` : ""} ===`);
   const dayEnd = new Date(`${date}T23:59:59.999Z`);
   const lookbackStart = new Date(Date.parse(`${date}T00:00:00Z`) - (LOOKBACK_DAYS - 1) * DAY_MS);
 
@@ -176,7 +183,7 @@ for (const date of dates) {
   const campaigns = [];
   let skippedEmpty = 0;
   for (const c of relevant) {
-    const m = await fetchStats(c.id, date);
+    const m = await fetchStats(c.id, statsFrom, date);
     const active = m.sent + m.uniqueOpens + m.replied + m.bounced + m.interested + m.unsubscribed > 0;
     if (c.status !== "active" && !active) { skippedEmpty++; continue; }
     console.log(`  ${c.name}\n    sent=${m.sent} | replied=${m.replied} | bounced=${m.bounced} | interested=${m.interested} | unsubscribed=${m.unsubscribed}`);

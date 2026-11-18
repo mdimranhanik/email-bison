@@ -137,8 +137,17 @@ export const fetchCampaignsTask = task({
     const dayStart = new Date(`${date}T00:00:00.000Z`);
     const dayEnd = new Date(`${date}T23:59:59.999Z`);
     const lookbackStart = new Date(dayStart.getTime() - (LOOKBACK_DAYS - 1) * DAY_MS);
+    // Weekends are not reported on their own: Monday's row also covers Saturday + Sunday
+    const statsFrom =
+      dayStart.getUTCDay() === 1
+        ? new Date(dayStart.getTime() - 2 * DAY_MS).toISOString().split("T")[0]
+        : date;
 
-    logger.info("Fetching campaigns", { date, lookbackStart: lookbackStart.toISOString() });
+    logger.info("Fetching campaigns", {
+      date,
+      statsFrom,
+      lookbackStart: lookbackStart.toISOString(),
+    });
 
     // ── Step 1: Paginate all campaigns ────────────────────────────────────────
     const allCampaigns: EBCampaign[] = [];
@@ -178,14 +187,14 @@ export const fetchCampaignsTask = task({
       relevantCampaigns.push(c);
     }
 
-    logger.info(`${relevantCampaigns.length} campaigns relevant to ${date} — fetching daily stats`);
+    logger.info(`${relevantCampaigns.length} campaigns relevant to ${date} — fetching stats ${statsFrom} → ${date}`);
 
     // ── Step 3: Fetch stats for the reporting day per campaign (sequentially) ─
     const campaigns: ProcessedCampaign[] = [];
     let skippedEmpty = 0;
 
     for (const c of relevantCampaigns) {
-      const metrics = await fetchStats(BASE_URL, apiKey, c.id, date, date);
+      const metrics = await fetchStats(BASE_URL, apiKey, c.id, statsFrom, date);
       // Non-active campaigns are only pulled in by the lookback — skip them on
       // days with no activity so the sheet isn't filled with all-zero rows.
       const hasActivity =
