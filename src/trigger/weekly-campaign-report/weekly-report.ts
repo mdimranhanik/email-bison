@@ -8,9 +8,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // schedule and run history — it now runs DAILY.
 export const dailyReportTask = schedules.task({
   id: "weekly-email-bison-report",
-  // Every day at 09:00 UTC = 3:00 PM Bangladesh time (Asia/Dhaka, UTC+6, no DST)
-  // Reports on the previous full UTC day
-  cron: "0 9 * * *",
+  // Tue–Sat at 09:00 UTC = 3:00 PM Bangladesh time (Asia/Dhaka, UTC+6, no DST)
+  // Reports on the previous full UTC day → covers Mon–Fri. Sat/Sun are not reported.
+  cron: "0 9 * * 2-6",
   run: async (payload) => {
     // ── Reporting day = yesterday (UTC) ───────────────────────────────────────
     // payload.timestamp is the scheduled fire time (today 09:00 UTC)
